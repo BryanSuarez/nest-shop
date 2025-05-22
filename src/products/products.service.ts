@@ -11,7 +11,8 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Product } from './entities/product.entity';
 import { Repository } from 'typeorm';
-
+import { PaginationDto } from 'src/common/dtos/pagination.dto';
+import { validate as isUUID } from 'uuid';
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger(ProductsService.name);
@@ -30,33 +31,48 @@ export class ProductsService {
     }
   }
 
-  async findAll() {
+  async findAll(paginationDto: PaginationDto) {
     try {
-      return await this.productRepository.find();
+      const { limit = 10, offset = 0 } = paginationDto;
+      const products = await this.productRepository.find({
+        take: limit,
+        skip: offset,
+      });
+      return products;
     } catch (error) {
       this.handleDBExceptions(error);
     }
   }
 
-  async findOne(id: string) {
-    try {
-      const product = await this.productRepository.findOneBy({ id });
-      if (!product) {
-        throw new NotFoundException(`Product with id ${id} not found`);
-      }
-      return product;
-    } catch (error) {
-      this.handleDBExceptions(error);
+  async findOne(term: string) {
+    let product: Product | null;
+    if (isUUID(term)) {
+      product = await this.productRepository.findOneBy({ id: term });
+    } else {
+      const queryBuilder = this.productRepository.createQueryBuilder('product');
+      product = await queryBuilder
+        .where('UPPER(title) =:title or slug =:slug', {
+          title: term.toUpperCase(),
+          slug: term.toLowerCase(),
+        })
+        .getOne();
     }
+    if (!product) {
+      throw new NotFoundException(`Product with term ${term} not found`);
+    }
+    return product;
   }
 
   async update(id: string, updateProductDto: UpdateProductDto) {
+    const product = await this.productRepository.preload({
+      id,
+      ...updateProductDto,
+    });
+    if (!product)
+      throw new NotFoundException(`Product with id ${id} not found`);
     try {
-      const product = await this.findOne(id);
-      await this.productRepository.update(id, updateProductDto);
-      return {
-        message: `Product with id ${id} updated`,
-      };
+      await this.productRepository.save(product);
+      return product;
     } catch (error) {
       this.handleDBExceptions(error);
     }
